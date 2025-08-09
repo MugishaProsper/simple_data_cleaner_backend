@@ -38,11 +38,6 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Initialize services
-data_cleaner = DataCleaner()
-data_visualizer = DataVisualizer()
-data_transformer = DataTransformer()
-
 # In-memory storage for demo purposes (use a database in production)
 data_store: Dict[str, Dict[str, Any]] = {}
 
@@ -113,47 +108,46 @@ async def clean_data(request: CleanDataRequest) -> Dict[str, Any]:
         data = data_store[request.file_id]
         df = data["df"].copy()
         
-        # Convert request to options dictionary
-        options = {
-            'fill_na': request.fill_missing,
-            'drop_na': False,  # We're not dropping rows with NA
-            'fill_strategy': 'mean',
-            'na_threshold': 0.5,
-            'drop_duplicates': request.drop_duplicates,
-            'standardize_columns': request.standardize_columns,
-            'infer_types': request.fix_datatypes,
-            'handle_outliers': request.handle_outliers,
-            'outlier_method': 'zscore',
-            'z_threshold': request.outlier_threshold,
-            'iqr_multiplier': 1.5,
-            'strip_strings': request.strip_whitespace,
-            'lowercase_columns': False,  # Not implemented in frontend
-            'parse_dates': request.fix_dates,
-            'remove_constant_columns': request.remove_constant_columns
-        }
+        # Initialize DataCleaner with the DataFrame
+        cleaner = DataCleaner(df)
         
-        # Set the dataframe in the cleaner
-        data_cleaner.df = df
-        data_cleaner.original_df = df.copy()
+        # Create cleaning options
+        options = CleaningOptions(
+            fill_missing=request.fill_missing,
+            drop_duplicates=request.drop_duplicates,
+            standardize_columns=request.standardize_columns,
+            fix_datatypes=request.fix_datatypes,
+            handle_outliers=request.handle_outliers,
+            strip_whitespace=request.strip_whitespace,
+            fix_dates=request.fix_dates,
+            remove_constant_columns=request.remove_constant_columns,
+            custom_na_values=request.custom_na_values,
+            date_columns=request.date_columns,
+            outlier_threshold=request.outlier_threshold
+        )
         
         # Apply cleaning operations
-        cleaned_df = data_cleaner.clean_data(df, options)
+        cleaned_df = cleaner.clean_data(options)
         
         # Update stored data
         data["df"] = cleaned_df
         data["cleaned"] = True
         
-        # Generate summary of cleaning results
+        # Get cleaning summary
+        cleaning_summary = cleaner.get_cleaning_summary()
+        
+        # Generate response summary
         summary = {
             "file_id": request.file_id,
-            "original_shape": data["original_summary"]["shape"],
+            "original_shape": df.shape,
             "cleaned_shape": cleaned_df.shape,
             "columns": cleaned_df.columns.tolist(),
-            "missing_values_before": data["original_summary"]["missing_values"],
+            "missing_values_before": df.isnull().sum().to_dict(),
             "missing_values_after": cleaned_df.isnull().sum().to_dict(),
             "data_types": {col: str(dtype) for col, dtype in cleaned_df.dtypes.items()},
             "preview": cleaned_df.head().to_dict(orient="records"),
-            "describe": cleaned_df.describe().to_dict()
+            "describe": cleaned_df.describe().to_dict(),
+            "cleaning_summary": cleaning_summary
         }
         
         return summary
@@ -163,73 +157,77 @@ async def clean_data(request: CleanDataRequest) -> Dict[str, Any]:
 
 @app.post("/visualize")
 async def visualize_data(
-    file_id: str,
-    plot_type: str,
-    x_axis: str,
-    y_axis: Optional[str] = None,
-    hue: Optional[str] = None
+    request: VisualizationRequest
 ) -> Dict[str, Any]:
     """Generate visualization based on user request"""
-    if file_id not in data_store:
+    if request.file_id not in data_store:
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        data = data_store[file_id]
+        data = data_store[request.file_id]
         df = data["df"]
         
-        # Generate visualization
-        plot_path = data_visualizer.create_visualization(
-            df=df,
-            plot_type=plot_type,
-            x=x_axis,
-            y=y_axis or "",
-            hue=hue or "",
-            file_id=file_id
+        # Validate dataframe and columns
+        if df.empty:
+            raise HTTPException(status_code=400, detail="Cannot visualize empty dataframe")
+        
+        if request.x_column not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{request.x_column}' not found in dataframe")
+        
+        if request.y_column and request.y_column not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{request.y_column}' not found in dataframe")
+        
+        # Initialize visualizer with the DataFrame
+        visualizer = DataVisualizer(df)
+        
+        # Create visualization
+        plot_filename = visualizer.create_plot(
+            plot_type=request.plot_type,
+            x_column=request.x_column,
+            y_column=request.y_column,
+            title=request.title,
+            file_id=request.file_id
         )
         
-        # Return URL to the generated plot
-        plot_url = f"/static/plots/{os.path.basename(plot_path)}"
+        return {
+            "plot_url": plot_filename,  # Remove the leading slash
+            "columns": df.columns.tolist()
+        }
         
-        return {"plot_url": plot_url}
-        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/transform")
 async def transform_data(
-    file_id: str,
-    operation: str,
-    columns: List[str]
+    request: TransformationRequest
 ) -> Dict[str, Any]:
     """Apply data transformation"""
-    if file_id not in data_store:
+    if request.file_id not in data_store:
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        data = data_store[file_id]
+        data = data_store[request.file_id]
         df = data["df"].copy()
         
-        # Create a new transformer instance for this operation
-        transformer = DataTransformer()
-        transformer.df = df
+        # Initialize transformer with the DataFrame
+        transformer = DataTransformer(df)
         
         # Apply transformation
-        if operation == "normalize":
-            transformer.normalize(columns)
-        elif operation == "standardize":
-            transformer.standardize(columns)
-        elif operation == "log_transform":
-            transformer.log_transform(columns)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported operation")
+        transformed_df = transformer.apply_transformation(
+            columns=request.columns,
+            transformation_type=request.transformation_type,
+            params=request.params
+        )
         
         # Update stored data
-        data["df"] = transformer.df
+        data["df"] = transformed_df
         
         return {
-            "operation": operation,
-            "columns": columns,
-            "preview": transformer.df.head().to_dict(orient="records")
+            "columns": transformed_df.columns.tolist(),
+            "preview": transformed_df.head().to_dict(orient="records"),
+            "transformation_summary": transformer.get_transformation_summary()
         }
         
     except Exception as e:
@@ -239,7 +237,7 @@ async def transform_data(
 async def download_data(file_id: str):
     """Download the processed data as CSV"""
     if file_id not in data_store:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail="File not ftound")
     
     try:
         data = data_store[file_id]
@@ -248,13 +246,9 @@ async def download_data(file_id: str):
         
         return FileResponse(
             output_path,
-            filename=f"cleaned_data_{file_id}.csv",
-            media_type="text/csv"
+            media_type="text/csv",
+            filename=f"processed_data.csv"
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

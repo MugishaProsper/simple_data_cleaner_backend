@@ -26,31 +26,50 @@ class DataTransformer:
     Handles both numerical and categorical data with support for custom transformations.
     """
     
-    def __init__(self):
+    def __init__(self, df: Optional[pd.DataFrame] = None):
         """Initialize the DataTransformer with default settings."""
-        self.df = None
+        self.df = df.copy() if df is not None else None
         self.transformation_summary = {
-            'transformations': [],
+            'transformations_applied': [],
+            'columns_transformed': [],
             'warnings': [],
             'errors': []
         }
         self._fitted = False
         self._transformers = {}
         self._preprocessor = None
-        
-    def _log_transformation(self, operation: str, columns: List[str], **kwargs) -> None:
-        """Helper method to log transformation details."""
-        log_entry = {
-            'operation': operation,
-            'columns': columns,
-            'timestamp': pd.Timestamp.now().isoformat(),
-            'parameters': kwargs
-        }
-        self.transformation_summary['transformations'].append(log_entry)
 
-    def set_dataframe(self, df: pd.DataFrame) -> None:
-        """Set the dataframe to be transformed."""
-        self.df = df.copy()
+    def apply_transformation(self, columns: List[str], transformation_type: str, 
+                           params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """
+        Apply transformation to specified columns.
+        
+        Args:
+            columns: List of column names to transform
+            transformation_type: Type of transformation to apply
+            params: Optional parameters for the transformation
+            
+        Returns:
+            Transformed pandas DataFrame
+        """
+        if self.df is None:
+            raise ValueError("DataFrame not set. Call set_dataframe() first.")
+        
+        if transformation_type == 'normalize':
+            self.normalize(columns)
+        elif transformation_type == 'standardize':
+            self.standardize(columns)
+        elif transformation_type == 'log':
+            self.log_transform(columns)
+        elif transformation_type == 'sqrt':
+            self.square_root_transform(columns)
+        elif transformation_type == 'scale':
+            feature_range = params.get('feature_range', (0, 1)) if params else (0, 1)
+            self.min_max_scale(columns, feature_range)
+        else:
+            raise ValueError(f"Unsupported transformation type: {transformation_type}")
+        
+        return self.df
 
     def normalize(self, columns: List[str]) -> None:
         """Apply min-max normalization to scale data between 0 and 1."""

@@ -22,8 +22,9 @@ class DataVisualizer:
     Handles figure creation, styling, and saving of plots.
     """
     
-    def __init__(self):
+    def __init__(self, df: Optional[pd.DataFrame] = None):
         """Initialize the DataVisualizer with default settings."""
+        self.df = df
         # Create plots directory if it doesn't exist
         self.plots_dir = os.path.join('static', 'plots')
         os.makedirs(self.plots_dir, exist_ok=True)
@@ -75,63 +76,43 @@ class DataVisualizer:
             plt.close()
             raise
     
-    def create_visualization(self, df: pd.DataFrame, plot_type: str, 
-                           x: Optional[str] = None, y: Optional[str] = None, hue: Optional[str] = None,
-                           title: Optional[str] = None, file_id: Optional[str] = None) -> str:
+    def create_plot(self, plot_type: str, x_column: str, y_column: Optional[str] = None, 
+                   title: Optional[str] = None, file_id: Optional[str] = None) -> str:
         """
-        Create a visualization based on the specified type and parameters.
+        Create a plot based on the specified type and parameters.
         
         Args:
-            df: Input DataFrame
-            plot_type: Type of plot to create (line, bar, scatter, hist, box, violin, pairplot, heatmap)
-            x: Column name for x-axis
-            y: Column name for y-axis (optional for some plot types)
-            hue: Column name for color encoding (optional)
+            plot_type: Type of plot to create
+            x_column: Column name for x-axis
+            y_column: Column name for y-axis (optional for some plot types)
             title: Plot title (optional)
             file_id: Unique identifier for the file (used in filename)
             
         Returns:
-            str: Path to the saved plot file
+            str: Filename of the saved plot file
         """
-        plot_handlers = {
-            'line': self._create_line_plot,
-            'bar': self._create_bar_plot,
-            'scatter': self._create_scatter_plot,
-            'hist': self._create_histogram,
-            'box': self._create_box_plot,
-            'violin': self._create_violin_plot,
-            'pairplot': self._create_pair_plot,
-            'heatmap': self._create_correlation_heatmap
-        }
-        
-        if plot_type not in plot_handlers:
-            raise ValueError(f"Unsupported plot type: {plot_type}")
+        if self.df is None:
+            raise ValueError("DataFrame not set. Call set_dataframe() first or pass df to constructor.")
         
         try:
             # Generate a filename based on plot type and columns
             filename = f"{plot_type}_{file_id or uuid.uuid4().hex[:8]}"
-            if x:
-                filename += f"_x_{x}"
-            if y:
-                filename += f"_y_{y}"
+            if x_column:
+                filename += f"_x_{x_column}"
+            if y_column:
+                filename += f"_y_{y_column}"
             
             # Call the appropriate plot handler
             if plot_type == 'line':
-                return self._create_line_plot(df, x or "", y or "", hue, title, filename)
+                return self._create_line_plot(self.df, x_column, y_column or "", None, title, filename)
             elif plot_type == 'bar':
-                return self._create_bar_plot(df, x or "", y or "", hue, title, filename)
+                return self._create_bar_plot(self.df, x_column, y_column or "", None, title, filename)
             elif plot_type == 'scatter':
-                return self._create_scatter_plot(df, x or "", y or "", hue, title, filename)
-            elif plot_type == 'hist':
-                return self._create_histogram(df, x or "", y, hue, title, filename)
-            elif plot_type == 'box':
-                return self._create_box_plot(df, x or "", y, hue, title, filename)
-            elif plot_type == 'violin':
-                return self._create_violin_plot(df, x or "", y, hue, title, filename)
-            elif plot_type == 'pairplot':
-                return self._create_pair_plot(df, x, y, hue, title, filename)
+                return self._create_scatter_plot(self.df, x_column, y_column or "", None, title, filename)
+            elif plot_type == 'histogram':
+                return self._create_histogram(self.df, x_column, y_column, None, title, filename)
             elif plot_type == 'heatmap':
-                return self._create_correlation_heatmap(df, x, y, hue, title, filename)
+                return self._create_correlation_heatmap(self.df, x_column, y_column, None, title, filename)
             else:
                 raise ValueError(f"Unsupported plot type: {plot_type}")
             

@@ -6,17 +6,18 @@ from datetime import datetime
 from scipy import stats
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import logging
+from models.schemas import CleaningOptions
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DataCleaner:
-    def __init__(self):
-        self.original_df = None
-        self.df = None
+    def __init__(self, df: pd.DataFrame):
+        self.df = df.copy()
+        self.original_df = df.copy()
         self.cleaning_summary = {
-            'original_shape': None,
+            'original_shape': df.shape,
             'cleaned_shape': None,
             'columns_processed': [],
             'steps_applied': [],
@@ -26,6 +27,7 @@ class DataCleaner:
             'rows_removed': 0
         }
         self.column_metadata = {}
+        self.modified_columns = set()
         
     def set_dataframe(self, df: pd.DataFrame) -> None:
         """Set the dataframe to be cleaned."""
@@ -33,71 +35,48 @@ class DataCleaner:
         self.original_df = df.copy()
         self.cleaning_summary['original_shape'] = df.shape
         
-    def clean_data(self, df: pd.DataFrame, options: Dict[str, Any]) -> pd.DataFrame:
+    def clean_data(self, options: CleaningOptions) -> pd.DataFrame:
         """
         Main method to clean the dataframe based on provided options.
         
         Args:
-            df: Input pandas DataFrame
-            options: Dictionary of cleaning options
+            options: CleaningOptions object with cleaning parameters
             
         Returns:
             Cleaned pandas DataFrame
         """
-        self.original_df = df.copy()
-        self.df = df.copy()
-        self.cleaning_summary = {
-            'original_shape': self.df.shape,
-            'columns_processed': [],
-            'steps_applied': [],
-            'warnings': [],
-            'errors': []
-        }
-        
         try:
             # Standardize column names first
-            if options.get('standardize_columns', True):
-                self._standardize_column_names()
+            if options.standardize_columns:
+                self.standardize_column_names()
             
             # Handle missing values
-            if options.get('fill_na', True) or options.get('drop_na', False):
-                self._handle_missing_values(
-                    fill_na=options.get('fill_na', True),
-                    drop_na=options.get('drop_na', False),
-                    fill_strategy=options.get('fill_strategy', 'mean'),
-                    na_threshold=options.get('na_threshold', 0.5)
-                )
+            if options.fill_missing:
+                self.handle_missing_values(options.custom_na_values)
             
             # Handle duplicates
-            if options.get('drop_duplicates', True):
-                self._remove_duplicates()
+            if options.drop_duplicates:
+                self.drop_duplicates()
             
             # Handle data types
-            if options.get('infer_types', True):
-                self._infer_and_convert_dtypes()
+            if options.fix_datatypes:
+                self.detect_and_convert_datatypes()
             
             # Handle outliers
-            if options.get('handle_outliers', True):
-                self._handle_outliers(
-                    method=options.get('outlier_method', 'zscore'),
-                    z_threshold=options.get('z_threshold', 3.0),
-                    iqr_multiplier=options.get('iqr_multiplier', 1.5)
-                )
+            if options.handle_outliers:
+                self.handle_outliers(options.outlier_threshold or 3.0)
             
             # Clean string data
-            if options.get('strip_strings', True):
-                self._clean_string_columns(
-                    strip_whitespace=options.get('strip_strings', True),
-                    lowercase=options.get('lowercase_columns', True)
-                )
+            if options.strip_whitespace:
+                self.strip_whitespace()
             
             # Parse dates
-            if options.get('parse_dates', True):
+            if options.fix_dates:
                 self._parse_dates()
             
             # Remove constant columns
-            if options.get('remove_constant_columns', True):
-                self._remove_constant_columns()
+            if options.remove_constant_columns:
+                self.remove_constant_columns()
             
             # Update cleaning summary
             self.cleaning_summary['cleaned_shape'] = self.df.shape
@@ -164,10 +143,10 @@ class DataCleaner:
                         elif fill_strategy == 'mode':
                             fill_value = self.df[col].mode()[0] if not self.df[col].mode().empty else 0
                         elif fill_strategy == 'ffill':
-                            self.df[col].fillna(method='ffill', inplace=True)
+                            self.df[col] = self.df[col].ffill()
                             continue
                         elif fill_strategy == 'bfill':
-                            self.df[col].fillna(method='bfill', inplace=True)
+                            self.df[col] = self.df[col].bfill()
                             continue
                         else:  # default to 0 or specified value
                             try:
@@ -265,7 +244,7 @@ class DataCleaner:
                 
             try:
                 # Try to infer datetime format
-                self.df[col] = pd.to_datetime(self.df[col], infer_datetime_format=True, errors='ignore')
+                self.df[col] = pd.to_datetime(self.df[col], infer_datetime_format=True, errors='coerce')
                 if pd.api.types.is_datetime64_any_dtype(self.df[col]):
                     self.cleaning_summary['steps_applied'].append(f'parsed_{col}_as_datetime')
             except (ValueError, TypeError):
@@ -364,7 +343,7 @@ class DataCleaner:
                 self.df[col].fillna(self.df[col].median(), inplace=True)
             elif pd.api.types.is_datetime64_dtype(self.df[col]):
                 # Forward fill datetime values
-                self.df[col].fillna(method='ffill', inplace=True)
+                self.df[col] = self.df[col].ffill()
             else:
                 # Fill categorical/string columns with mode
                 self.df[col].fillna(self.df[col].mode()[0], inplace=True)
