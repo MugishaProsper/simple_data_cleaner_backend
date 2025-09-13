@@ -68,7 +68,7 @@ class DataFile(Base):
     file_path = Column(String(500), nullable=False)
     file_size = Column(Integer, nullable=False)
     mime_type = Column(String(100), nullable=False)
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Optional for public files
     
     # File metadata
     columns = Column(Text)  # JSON string of column names

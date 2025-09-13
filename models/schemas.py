@@ -17,6 +17,7 @@ class TransformationType(str, Enum):
     SCALE = "scale"
 
 class CleaningOptions(BaseModel):
+    file_id: str
     fill_missing: bool = True
     drop_duplicates: bool = True
     standardize_columns: bool = True

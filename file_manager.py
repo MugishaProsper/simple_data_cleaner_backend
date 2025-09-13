@@ -2,6 +2,7 @@ import os
 import shutil
 import pandas as pd
 import numpy as np
+import json
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -66,10 +67,10 @@ class FileManager:
             file_size=len(file_content),
             mime_type=self._get_mime_type(original_filename),
             owner_id=user_id,
-            columns=metadata.get('columns'),
-            shape=metadata.get('shape'),
-            data_types=metadata.get('data_types'),
-            missing_values=metadata.get('missing_values'),
+            columns=json.dumps(metadata.get('columns')),
+            shape=json.dumps(metadata.get('shape')),
+            data_types=json.dumps(metadata.get('data_types')),
+            missing_values=json.dumps(metadata.get('missing_values')),
             expires_at=get_file_expiry_time()
         )
         
@@ -78,6 +79,55 @@ class FileManager:
         db_session.refresh(data_file)
         
         logger.info(f"File saved successfully: {file_id}")
+        return data_file
+    
+    async def save_uploaded_file_public(
+        self,
+        file_content: bytes,
+        original_filename: str,
+        db_session
+    ) -> DataFile:
+        """Save uploaded file for public access (no user authentication)."""
+        
+        # Validate file
+        if not FileUploadSecurity.validate_file_size(len(file_content)):
+            raise FileProcessingError(f"File too large. Maximum size: {self.max_file_size} bytes")
+        
+        if not FileUploadSecurity.validate_file_type(original_filename):
+            raise FileProcessingError(f"Invalid file type. Allowed types: {', '.join(self.allowed_types)}")
+        
+        # Generate secure filename and file ID
+        file_id = generate_file_id()
+        secure_filename = FileUploadSecurity.generate_secure_filename(original_filename)
+        file_path = self.upload_dir / secure_filename
+        
+        # Save file asynchronously
+        await self._save_file_async(file_content, file_path)
+        
+        # Extract metadata
+        metadata = await self._extract_file_metadata(file_path, original_filename)
+        
+        # Create database record (no user_id for public access)
+        data_file = DataFile(
+            file_id=file_id,
+            filename=secure_filename,
+            original_filename=original_filename,
+            file_path=str(file_path),
+            file_size=len(file_content),
+            mime_type=self._get_mime_type(original_filename),
+            owner_id=None,  # No user required for public files
+            columns=json.dumps(metadata.get('columns')),
+            shape=json.dumps(metadata.get('shape')),
+            data_types=json.dumps(metadata.get('data_types')),
+            missing_values=json.dumps(metadata.get('missing_values')),
+            expires_at=get_file_expiry_time()
+        )
+        
+        db_session.add(data_file)
+        db_session.commit()
+        db_session.refresh(data_file)
+        
+        logger.info(f"Public file saved successfully: {file_id}")
         return data_file
     
     async def _save_file_async(self, content: bytes, file_path: Path) -> None:

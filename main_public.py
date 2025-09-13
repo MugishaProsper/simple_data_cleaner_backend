@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
@@ -8,18 +9,13 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, B
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 import pandas as pd
 import logging
 
 # Import our modules
 from config import settings
-from database import get_db, init_db, cleanup_expired_files, DataFile, User
-from auth import (
-    auth_manager, get_current_user, get_current_active_user, 
-    authenticate_user, create_user, User
-)
+from database import get_db, init_db, cleanup_expired_files, DataFile
 from security import (
     RateLimitMiddleware, SecurityHeadersMiddleware, RequestLoggingMiddleware,
     generate_request_id
@@ -30,8 +26,7 @@ from services.data_cleaner import DataCleaner
 from services.data_visualizer import DataVisualizer
 from services.data_transformer import DataTransformer
 from models.schemas import (
-    CleaningOptions, VisualizationRequest, TransformationRequest,
-    UserCreate, UserLogin, Token, TokenRefresh
+    CleaningOptions, VisualizationRequest, TransformationRequest
 )
 
 # Setup logging
@@ -48,14 +43,11 @@ os.makedirs("logs", exist_ok=True)
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
-    logger.info("Starting Data Cleaner API...")
+    logger.info("Starting Public Data Cleaner API...")
     
     # Initialize database
     init_db()
     logger.info("Database initialized")
-    
-    # Create default admin user if it doesn't exist
-    await create_default_admin()
     
     # Start background cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup())
@@ -73,12 +65,12 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title=settings.app_name,
+    title="Public Data Cleaning and Analysis API",
     version=settings.app_version,
-    description="Production-ready data cleaning and analysis API",
+    description="Public data cleaning and analysis API - no authentication required",
     lifespan=lifespan,
-    docs_url="/docs" if settings.debug else None,
-    redoc_url="/redoc" if settings.debug else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 # Add middleware
@@ -112,26 +104,6 @@ async def periodic_cleanup():
             logger.error(f"Error in periodic cleanup: {e}")
 
 
-async def create_default_admin():
-    """Create default admin user if it doesn't exist."""
-    db = next(get_db())
-    try:
-        admin_user = db.query(User).filter(User.username == "admin").first()
-        if not admin_user:
-            create_user(
-                db=db,
-                username="admin",
-                email="admin@datacleaner.com",
-                password="admin123",  # Change this in production!
-                is_admin=True
-            )
-            logger.info("Default admin user created")
-    except Exception as e:
-        logger.error(f"Error creating default admin: {e}")
-    finally:
-        db.close()
-
-
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -140,131 +112,15 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": settings.app_version,
-        "environment": settings.environment
+        "environment": settings.environment,
+        "public": True
     }
-
-
-# Authentication endpoints
-@app.post("/auth/register", response_model=Dict[str, str])
-async def register(user_data: UserCreate, db: Session = Depends(get_db)):
-    """Register a new user."""
-    try:
-        # Check if user already exists
-        existing_user = db.query(User).filter(
-            (User.username == user_data.username) | (User.email == user_data.email)
-        ).first()
-        
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Username or email already registered"
-            )
-        
-        # Create user
-        user = create_user(
-            db=db,
-            username=user_data.username,
-            email=user_data.email,
-            password=user_data.password
-        )
-        
-        logger.info(f"New user registered: {user.username}")
-        
-        return {"message": "User registered successfully", "user_id": str(user.id)}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Registration failed"
-        )
-
-
-@app.post("/auth/login", response_model=Token)
-async def login(user_credentials: UserLogin, db: Session = Depends(get_db)):
-    """Login user and return access token."""
-    try:
-        user = authenticate_user(db, user_credentials.username, user_credentials.password)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Create tokens
-        access_token = auth_manager.create_access_token(data={"sub": str(user.id)})
-        refresh_token = auth_manager.create_refresh_token(data={"sub": str(user.id)})
-        
-        # Create session
-        token_id = generate_request_id()
-        auth_manager.create_user_session(db, user.id, token_id)
-        
-        logger.info(f"User logged in: {user.username}")
-        
-        return Token(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            token_type="bearer"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Login failed"
-        )
-
-
-@app.post("/auth/refresh", response_model=Token)
-async def refresh_token(refresh_data: TokenRefresh, db: Session = Depends(get_db)):
-    """Refresh access token."""
-    try:
-        payload = auth_manager.verify_token(refresh_data.refresh_token)
-        user_id = payload.get("sub")
-        
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token"
-            )
-        
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive"
-            )
-        
-        # Create new tokens
-        access_token = auth_manager.create_access_token(data={"sub": str(user.id)})
-        new_refresh_token = auth_manager.create_refresh_token(data={"sub": str(user.id)})
-        
-        return Token(
-            access_token=access_token,
-            refresh_token=new_refresh_token,
-            token_type="bearer"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Token refresh error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Token refresh failed"
-        )
 
 
 # File upload endpoint
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """Upload a CSV file and return initial data summary."""
@@ -272,11 +128,10 @@ async def upload_file(
         # Read file content
         content = await file.read()
         
-        # Save file and get metadata
-        data_file = await file_manager.save_uploaded_file(
+        # Save file and get metadata (no user_id needed for public app)
+        data_file = await file_manager.save_uploaded_file_public(
             file_content=content,
             original_filename=file.filename,
-            user_id=current_user.id,
             db_session=db
         )
         
@@ -309,15 +164,13 @@ async def upload_file(
 @app.post("/clean")
 async def clean_data(
     request: CleaningOptions,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """Clean the uploaded data based on provided options."""
     try:
-        # Get data file
+        # Get data file (no user restriction for public app)
         data_file = db.query(DataFile).filter(
-            DataFile.file_id == request.file_id,
-            DataFile.owner_id == current_user.id
+            DataFile.file_id == request.file_id
         ).first()
         
         if not data_file:
@@ -379,15 +232,13 @@ async def clean_data(
 @app.post("/visualize")
 async def visualize_data(
     request: VisualizationRequest,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """Generate visualization based on user request."""
     try:
-        # Get data file
+        # Get data file (no user restriction for public app)
         data_file = db.query(DataFile).filter(
-            DataFile.file_id == request.file_id,
-            DataFile.owner_id == current_user.id
+            DataFile.file_id == request.file_id
         ).first()
         
         if not data_file:
@@ -451,15 +302,13 @@ async def visualize_data(
 @app.post("/transform")
 async def transform_data(
     request: TransformationRequest,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """Apply data transformation."""
     try:
-        # Get data file
+        # Get data file (no user restriction for public app)
         data_file = db.query(DataFile).filter(
-            DataFile.file_id == request.file_id,
-            DataFile.owner_id == current_user.id
+            DataFile.file_id == request.file_id
         ).first()
         
         if not data_file:
@@ -508,15 +357,13 @@ async def transform_data(
 @app.get("/download/{file_id}")
 async def download_data(
     file_id: str,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Download the processed data as CSV."""
     try:
-        # Get data file
+        # Get data file (no user restriction for public app)
         data_file = db.query(DataFile).filter(
-            DataFile.file_id == file_id,
-            DataFile.owner_id == current_user.id
+            DataFile.file_id == file_id
         ).first()
         
         if not data_file:
@@ -549,35 +396,42 @@ async def download_data(
         )
 
 
-# User files endpoint
-@app.get("/files")
-async def get_user_files(
-    current_user: User = Depends(get_current_active_user),
+# Get file info endpoint (public)
+@app.get("/files/{file_id}")
+async def get_file_info(
+    file_id: str,
     db: Session = Depends(get_db)
-) -> List[Dict[str, Any]]:
-    """Get list of user's uploaded files."""
+) -> Dict[str, Any]:
+    """Get information about a specific file."""
     try:
-        files = db.query(DataFile).filter(
-            DataFile.owner_id == current_user.id
-        ).order_by(DataFile.created_at.desc()).all()
+        data_file = db.query(DataFile).filter(
+            DataFile.file_id == file_id
+        ).first()
         
-        return [
-            {
-                "file_id": file.file_id,
-                "filename": file.original_filename,
-                "size": file.file_size,
-                "created_at": file.created_at.isoformat(),
-                "is_processed": file.is_processed,
-                "processing_status": file.processing_status
-            }
-            for file in files
-        ]
+        if not data_file:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
         
+        return {
+            "file_id": data_file.file_id,
+            "filename": data_file.original_filename,
+            "size": data_file.file_size,
+            "created_at": data_file.created_at.isoformat(),
+            "is_processed": data_file.is_processed,
+            "processing_status": data_file.processing_status,
+            "columns": json.loads(data_file.columns) if data_file.columns else [],
+            "shape": json.loads(data_file.shape) if data_file.shape else []
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting user files: {e}")
+        logger.error(f"Error getting file info: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve files"
+            detail="Failed to retrieve file information"
         )
 
 
@@ -603,7 +457,7 @@ if __name__ == "__main__":
     import uvicorn
     
     uvicorn.run(
-        "main_production:app",
+        "main_public:app",
         host=settings.host,
         port=settings.port,
         workers=settings.workers if settings.environment == "production" else 1,

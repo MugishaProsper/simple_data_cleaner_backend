@@ -1,6 +1,7 @@
 import os
 from typing import Optional, List
-from pydantic import BaseSettings, validator
+from pydantic import field_validator
+from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     rate_limit_window: int = 3600  # 1 hour
     
     # CORS
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8080"]
+    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:8080"]
     cors_allow_credentials: bool = True
     
     # Logging
@@ -54,22 +55,25 @@ class Settings(BaseSettings):
     enable_metrics: bool = True
     metrics_port: int = 9090
     
-    @validator('secret_key')
+    @field_validator('secret_key')
+    @classmethod
     def validate_secret_key(cls, v):
         if len(v) < 32:
             raise ValueError('Secret key must be at least 32 characters long')
         return v
     
-    @validator('cors_origins', pre=True)
+    @field_validator('cors_origins', mode='before')
+    @classmethod
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(',')]
         return v
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False
+    }
 
 
 @lru_cache()

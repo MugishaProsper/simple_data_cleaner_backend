@@ -1,7 +1,7 @@
 @echo off
-REM Production startup script for Data Cleaner API (Windows)
+REM Public Data Cleaner API startup script (Windows)
 
-echo Starting Data Cleaner API...
+echo Starting Public Data Cleaner API...
 
 REM Check if .env file exists
 if not exist .env (
@@ -19,12 +19,12 @@ echo Initializing database...
 python -c "from database import init_db; init_db()"
 
 REM Start the application
-echo Starting application server...
+echo Starting public application server...
 
 if "%ENVIRONMENT%"=="production" (
     REM Production mode with multiple workers
-    uvicorn main_production:app --host 0.0.0.0 --port 8000 --workers 4 --access-log --log-level info
+    uvicorn main_public:app --host 0.0.0.0 --port 8000 --workers 4 --access-log --log-level info
 ) else (
     REM Development mode
-    uvicorn main_production:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    uvicorn main_public:app --host 0.0.0.0 --port 8000 --reload --log-level debug
 )
