@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
 from enum import Enum
 
@@ -62,3 +62,55 @@ class DataSummary(BaseModel):
     categorical_columns: List[str]
     datetime_columns: List[str]
     column_summaries: List[ColumnSummary]
+
+
+# Authentication schemas
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=100)
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+
+
+class TokenRefresh(BaseModel):
+    refresh_token: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    is_active: bool
+    is_admin: bool
+    created_at: str
+
+
+# File management schemas
+class FileUploadResponse(BaseModel):
+    file_id: str
+    filename: str
+    size: int
+    columns: List[str]
+    shape: List[int]
+    missing_values: Dict[str, int]
+    data_types: Dict[str, str]
+    preview: List[Dict[str, Any]]
+
+
+class FileListResponse(BaseModel):
+    file_id: str
+    filename: str
+    size: int
+    created_at: str
+    is_processed: bool
+    processing_status: str
